@@ -40,9 +40,11 @@
 
 #include "cpu/o3/fu_pool.hh"
 
+#include <iostream>
 #include <sstream>
 
 #include "cpu/func_unit.hh"
+#include "enums/OpClass.hh"
 
 namespace gem5
 {
@@ -83,7 +85,7 @@ FUPool::~FUPool()
 
 // Constructor
 FUPool::FUPool(const Params &p)
-    : SimObject(p)
+    : SimObject(p), statsRegistered(false)
 {
     numFU = 0;
 
@@ -151,6 +153,87 @@ FUPool::FUPool(const Params &p)
     for (int i = 0; i < numFU; i++) {
         unitBusy[i] = false;
     }
+
+    // === Initialize Port Utilization Statistics ===
+    fuUsageCount.resize(numFU, 0);
+    fuBusyCycles.resize(numFU, 0);
+    fuPendingBusyCycles.resize(numFU, 0);
+    fuOpClassUsage.resize(numFU);
+    fuOpClassCycles.resize(numFU);
+    
+    for (int i = 0; i < numFU; i++) {
+        fuOpClassUsage[i].fill(0);
+        fuOpClassCycles[i].fill(0);
+    }
+}
+
+void
+FUPool::syncStatsForPort(int fu_idx)
+{
+    if (!statsRegistered) {
+        return;
+    }
+
+    portBusyCycles[fu_idx] = fuBusyCycles[fu_idx];
+    portUsageCount[fu_idx] = fuUsageCount[fu_idx];
+    for (int op = 0; op < Num_OpClasses; ++op) {
+        portOpClassUsage[fu_idx][op] = fuOpClassUsage[fu_idx][op];
+        portOpClassCycles[fu_idx][op] = fuOpClassCycles[fu_idx][op];
+    }
+}
+
+void
+FUPool::syncTotalBusyCycles()
+{
+    if (!statsRegistered) {
+        return;
+    }
+
+    uint64_t total = 0;
+    for (int i = 0; i < numFU; ++i) {
+        total += fuBusyCycles[i];
+    }
+    totalPortBusyCycles = total;
+}
+
+void
+FUPool::regStats()
+{
+    SimObject::regStats();
+
+    portBusyCycles
+        .init(numFU)
+        .name(name() + ".portBusyCycles")
+        .desc("Busy cycles per FU port");
+    portUsageCount
+        .init(numFU)
+        .name(name() + ".portUsageCount")
+        .desc("Usage count per FU port");
+    portOpClassUsage
+        .init(numFU, Num_OpClasses)
+        .name(name() + ".portOpClassUsage")
+        .desc("Per-port, per-opclass usage count");
+    portOpClassCycles
+        .init(numFU, Num_OpClasses)
+        .name(name() + ".portOpClassCycles")
+        .desc("Per-port, per-opclass busy cycles");
+    totalPortBusyCycles
+        .name(name() + ".totalPortBusyCycles")
+        .desc("Sum of all port busy cycles");
+
+    statsRegistered = true;
+    for (int i = 0; i < numFU; ++i) {
+        const std::string portLabel = "Port" + std::to_string(i);
+        portBusyCycles.subname(i, portLabel);
+        portUsageCount.subname(i, portLabel);
+        portOpClassUsage.subname(i, portLabel);
+        portOpClassCycles.subname(i, portLabel);
+        syncStatsForPort(i);
+    }
+    portOpClassUsage.ysubnames(enums::OpClassStrings);
+    portOpClassCycles.ysubnames(enums::OpClassStrings);
+
+    syncTotalBusyCycles();
 }
 
 bool
@@ -185,6 +268,9 @@ FUPool::getUnit(OpClass capability)
     assert(fu_idx < numFU);
 
     unitBusy[fu_idx] = true;
+    
+    // Record port usage statistics
+    recordPortUsage(fu_idx, capability);
 
     return fu_idx;
 }
@@ -206,6 +292,9 @@ FUPool::processFreeUnits()
         assert(unitBusy[fu_idx]);
 
         unitBusy[fu_idx] = false;
+        
+        // Record busy cycles
+        recordPortFreed(fu_idx);
     }
 }
 
@@ -241,6 +330,40 @@ FUPool::dump()
 
         std::cout << "\n";
     }
+}
+
+void
+FUPool::recordPortUsage(int fu_idx, OpClass capability)
+{
+    assert(fu_idx >= 0 && fu_idx < numFU);
+
+    fuUsageCount[fu_idx]++;
+    fuOpClassUsage[fu_idx][capability]++;
+
+    uint64_t busyCycles = 0;
+    if (pipelined[capability]) {
+        busyCycles = 1;
+    } else {
+        busyCycles = static_cast<uint64_t>(maxOpLatencies[capability]);
+        if (busyCycles == 0) {
+            busyCycles = 1;
+        }
+    }
+
+    fuPendingBusyCycles[fu_idx] += busyCycles;
+    fuOpClassCycles[fu_idx][capability] += busyCycles;
+
+    syncStatsForPort(fu_idx);
+}
+
+void
+FUPool::recordPortFreed(int fu_idx)
+{
+    assert(fu_idx >= 0 && fu_idx < numFU);
+    fuBusyCycles[fu_idx] += fuPendingBusyCycles[fu_idx];
+    fuPendingBusyCycles[fu_idx] = 0;
+    syncStatsForPort(fu_idx);
+    syncTotalBusyCycles();
 }
 
 bool

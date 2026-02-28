@@ -47,6 +47,7 @@
 #include <string>
 #include <vector>
 
+#include "base/statistics.hh"
 #include "cpu/op_class.hh"
 #include "params/FUPool.hh"
 #include "sim/sim_object.hh"
@@ -131,6 +132,34 @@ class FUPool : public SimObject
     /** Functional units. */
     std::vector<FuncUnit *> funcUnits;
 
+    // === Port Utilization Statistics ===
+    /** Usage count for each FU (port). */
+    std::vector<uint64_t> fuUsageCount;
+    /** Busy cycles for each FU (port). */
+    std::vector<uint64_t> fuBusyCycles;
+    /** Busy cycles to commit when each FU is released. */
+    std::vector<uint64_t> fuPendingBusyCycles;
+    /** Per-port, per-opclass usage statistics. */
+    std::vector<std::array<uint64_t, Num_OpClasses>> fuOpClassUsage;
+    /** Per-port, per-opclass cycles (for latency tracking). */
+    std::vector<std::array<uint64_t, Num_OpClasses>> fuOpClassCycles;
+
+    // gem5 stats
+    statistics::Vector portBusyCycles;
+    statistics::Vector portUsageCount;
+    statistics::Vector2d portOpClassUsage;
+    statistics::Vector2d portOpClassCycles;
+    statistics::Scalar totalPortBusyCycles;
+    /** True once gem5 stats vectors are initialized. */
+    bool statsRegistered;
+
+    /** Copy one port's internal counters to gem5 stats vectors. */
+    void syncStatsForPort(int fu_idx);
+    /** Recompute total busy cycles and sync scalar stat. */
+    void syncTotalBusyCycles();
+    /** Register statistics for gem5 stats.txt output. */
+    void regStats() override;
+
   public:
     typedef FUPoolParams Params;
     /** Constructs a FU pool. */
@@ -198,6 +227,12 @@ class FUPool : public SimObject
     bool isPipelined(OpClass capability) {
         return pipelined[capability];
     }
+
+    /** Update port utilization statistics (called when FU is allocated). */
+    void recordPortUsage(int fu_idx, OpClass capability);
+    
+    /** Update busy cycles (called when FU is freed). */
+    void recordPortFreed(int fu_idx);
 
     /** Have all the FUs drained? */
     bool isDrained() const;
