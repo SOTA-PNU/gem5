@@ -159,6 +159,8 @@ class FUPool : public SimObject
     void syncTotalBusyCycles();
     /** Register statistics for gem5 stats.txt output. */
     void regStats() override;
+    /** Sync internal counters to gem5 stats right before a stats dump. */
+    void preDumpStats() override;
 
   public:
     typedef FUPoolParams Params;

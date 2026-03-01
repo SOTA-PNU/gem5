@@ -236,6 +236,21 @@ FUPool::regStats()
     syncTotalBusyCycles();
 }
 
+void
+FUPool::preDumpStats()
+{
+    SimObject::preDumpStats();
+
+    if (!statsRegistered) {
+        return;
+    }
+
+    for (int i = 0; i < numFU; ++i) {
+        syncStatsForPort(i);
+    }
+    syncTotalBusyCycles();
+}
+
 bool
 FUPool::isCapable(OpClass capability)
 {
@@ -352,8 +367,6 @@ FUPool::recordPortUsage(int fu_idx, OpClass capability)
 
     fuPendingBusyCycles[fu_idx] += busyCycles;
     fuOpClassCycles[fu_idx][capability] += busyCycles;
-
-    syncStatsForPort(fu_idx);
 }
 
 void
@@ -362,8 +375,6 @@ FUPool::recordPortFreed(int fu_idx)
     assert(fu_idx >= 0 && fu_idx < numFU);
     fuBusyCycles[fu_idx] += fuPendingBusyCycles[fu_idx];
     fuPendingBusyCycles[fu_idx] = 0;
-    syncStatsForPort(fu_idx);
-    syncTotalBusyCycles();
 }
 
 bool
